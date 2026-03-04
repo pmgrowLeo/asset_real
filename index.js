@@ -1,71 +1,74 @@
 const express = require('express');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const iconv = require('iconv-lite');
 const cron = require('node-cron');
-const YahooFinance = require('yahoo-finance2').default;
+const cors = require('cors');
 
 const app = express();
+app.use(cors());
 const PORT = process.env.PORT || 3100;
-
-// 1. 옵션 오류 수정: 허용되지 않는 속성(timeout) 제거
-const yahooFinance = new YahooFinance({ 
-    suppressNotices: ['yahooSurvey'] 
-});
 
 let priceCache = {
     usdPerOz: 0,
     krwPerGram: 0,
-    lastUpdated: "데이터 수집 전",
+    lastUpdated: "데이터 수집 중...",
     status: 'initializing'
 };
 
-// 2. 재시도 로직이 포함된 수집 함수
-async function updateGoldPrice(retries = 3) {
+async function getGoldPrice() {
     try {
-        console.log('🔄 [백그라운드] 데이터 수집 시도 중...');
-        
-        // fetchOptions는 호출 시점에 전달 (헤더만 포함)
-        const options = {
-            fetchOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-                }
-            }
+        console.log('🔄 [System] 네이버 검색 기반 데이터 수집 시작...');
+
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
         };
 
-        const [gold, exchange] = await Promise.all([
-            yahooFinance.quote('GC=F', {}, options),
-            yahooFinance.quote('KRW=X', {}, options)
-        ]);
+        // 1. 국제 금 시세 (네이버 검색 결과 페이지)
+        const goldUrl = 'https://search.naver.com/search.naver?query=%EA%B5%AD%EC%A0%9C%EA%B8%88%EC%8B%9C%EC%84%B8';
+        const goldRes = await axios.get(goldUrl, { headers, responseType: 'arraybuffer' });
+        const goldHtml = iconv.decode(goldRes.data, 'utf-8'); // 검색 페이지는 보통 UTF-8입니다.
+        const $gold = cheerio.load(goldHtml);
+        
+        // 검색 결과 카드에서 가격 추출
+        const usdPriceText = $gold('.spt_con strong').first().text() || $gold('._price_value').first().text();
+        const usdPerOz = parseFloat(usdPriceText.replace(/[^0-9.]/g, ''));
 
-        const usdPrice = gold.regularMarketPrice;
-        const krwRate = exchange.regularMarketPrice;
-        const pricePerGram = (usdPrice * krwRate) / 31.1034768;
+        // 2. 환율 (네이버 검색 결과 페이지)
+        const exUrl = 'https://search.naver.com/search.naver?query=%ED%99%98%EC%9C%A8';
+        const exRes = await axios.get(exUrl, { headers, responseType: 'arraybuffer' });
+        const exHtml = iconv.decode(exRes.data, 'utf-8');
+        const $ex = cheerio.load(exHtml);
+        
+        const krwRateText = $ex('.spt_con strong').first().text() || $ex('.rate_tlt strong').first().text();
+        const krwRate = parseFloat(krwRateText.replace(/[^0-9.]/g, ''));
+
+        // 3. 검증 및 계산
+        if (!usdPerOz || !krwRate) {
+            throw new Error(`데이터 추출 실패 - Gold: ${usdPerOz}, Ex: ${krwRate}`);
+        }
+
+        const pricePerGram = (usdPerOz * krwRate) / 31.1034768;
 
         priceCache = {
-            usdPerOz: usdPrice,
+            usdPerOz: usdPerOz,
             krwPerGram: Math.round(pricePerGram),
             lastUpdated: new Date().toLocaleString(),
             status: 'success'
         };
-        console.log(`✅ 업데이트 완료: ₩${priceCache.krwPerGram}/g`);
 
+        console.log(`✅ 업데이트 성공: ₩${priceCache.krwPerGram}/g ($${usdPerOz})`);
     } catch (error) {
-        console.error(`❌ 에러 발생: ${error.message}`);
-        
-        // 429 에러 발생 시 재시도 (10초 대기 후)
-        if (retries > 0 && error.message.includes('429')) {
-            console.log(`⚠️ 차단됨. 10초 후 다시 시도합니다... (남은 횟수: ${retries})`);
-            setTimeout(() => updateGoldPrice(retries - 1), 10000);
-        } else {
-            priceCache.status = 'error';
-        }
+        console.error('❌ 수집 실패:', error.message);
+        priceCache.status = 'error';
     }
 }
 
-cron.schedule('*/10 * * * *', () => updateGoldPrice());
-updateGoldPrice();
+cron.schedule('*/10 * * * *', getGoldPrice);
+getGoldPrice();
 
 app.get('/api/gold', (req, res) => res.json(priceCache));
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 서버 가동 중: http://localhost:${PORT}/api/gold`);
+    console.log(`🚀 서버 실행 중: http://localhost:${PORT}/api/gold`);
 });
