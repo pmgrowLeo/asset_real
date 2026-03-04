@@ -1,0 +1,19 @@
+{
+  "dependencies": {
+    "express": "^5.2.1",
+    "install": "^0.13.0",
+    "node-cron": "^4.2.1",
+    "npm": "^11.11.0",
+    "yahoo-finance2": "^3.13.1"
+  },
+  "name": "finance",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
