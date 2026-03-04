@@ -3,64 +3,69 @@ const cron = require('node-cron');
 const YahooFinance = require('yahoo-finance2').default;
 
 const app = express();
-const PORT = process.env.PORT || 3100; 
+const PORT = process.env.PORT || 3100;
 
+// 1. 옵션 오류 수정: 허용되지 않는 속성(timeout) 제거
+const yahooFinance = new YahooFinance({ 
+    suppressNotices: ['yahooSurvey'] 
+});
 
-
-// 야후 파이낸스 인스턴스 (알림 끄기 설정)
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
-
-// [핵심] 서버 메모리에 데이터를 저장할 변수
 let priceCache = {
     usdPerOz: 0,
     krwPerGram: 0,
-    lastUpdated: "서버 시작 중...",
+    lastUpdated: "데이터 수집 전",
     status: 'initializing'
 };
 
-// 금 시세를 가져와서 'priceCache' 변수 값만 바꾸는 함수
-async function updateGoldPrice() {
+// 2. 재시도 로직이 포함된 수집 함수
+async function updateGoldPrice(retries = 3) {
     try {
-        console.log('🔄 [백그라운드] 야후 데이터 수집 시작...');
+        console.log('🔄 [백그라운드] 데이터 수집 시도 중...');
+        
+        // fetchOptions는 호출 시점에 전달 (헤더만 포함)
+        const options = {
+            fetchOptions: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                }
+            }
+        };
+
         const [gold, exchange] = await Promise.all([
-            yahooFinance.quote('GC=F'),
-            yahooFinance.quote('KRW=X')
+            yahooFinance.quote('GC=F', {}, options),
+            yahooFinance.quote('KRW=X', {}, options)
         ]);
 
         const usdPrice = gold.regularMarketPrice;
         const krwRate = exchange.regularMarketPrice;
         const pricePerGram = (usdPrice * krwRate) / 31.1034768;
 
-        // 전역 변수 priceCache 업데이트
         priceCache = {
             usdPerOz: usdPrice,
             krwPerGram: Math.round(pricePerGram),
             lastUpdated: new Date().toLocaleString(),
             status: 'success'
         };
-        console.log(`✅ [백그라운드] 업데이트 완료: ₩${priceCache.krwPerGram}/g`);
-		console.log(priceCache);
+        console.log(`✅ 업데이트 완료: ₩${priceCache.krwPerGram}/g`);
+
     } catch (error) {
-        // 여기서 에러가 나도 브라우저엔 영향을 주지 않음
-        console.error('❌ [백그라운드] 업데이트 에러:', error.message);
-        priceCache.status = 'error';
+        console.error(`❌ 에러 발생: ${error.message}`);
+        
+        // 429 에러 발생 시 재시도 (10초 대기 후)
+        if (retries > 0 && error.message.includes('429')) {
+            console.log(`⚠️ 차단됨. 10초 후 다시 시도합니다... (남은 횟수: ${retries})`);
+            setTimeout(() => updateGoldPrice(retries - 1), 10000);
+        } else {
+            priceCache.status = 'error';
+        }
     }
 }
 
-// 5분마다 실행
-cron.schedule('*/5 * * * *', updateGoldPrice);
-updateGoldPrice(); // 서버 켜질 때 즉시 실행
+cron.schedule('*/10 * * * *', () => updateGoldPrice());
+updateGoldPrice();
 
-// [가장 중요] 사용자가 접속했을 때 처리
-app.get('/api/gold', (req, res) => {
-    console.log('📱 [API] 클라이언트가 데이터를 요청함');
-    
-    // 💡 절대 yahooFinance.quote(...)를 여기서 호출하지 마세요.
-    // 오직 서버가 미리 준비해둔 'priceCache' 객체만 보냅니다.
-    res.json(priceCache); 
-});
-
+app.get('/api/gold', (req, res) => res.json(priceCache));
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 서버가 실행되었습니다. 포트: ${PORT}`);
+    console.log(`🚀 서버 가동 중: http://localhost:${PORT}/api/gold`);
 });
