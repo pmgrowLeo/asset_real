@@ -33,7 +33,7 @@ async function fetchStockDataByCode(inputCode) {
 
         if (isEnglish) {
             // [해외 주식] 사용자가 요청한 전용 basic API 활용
-            const overseasUrl = `https://api.stock.naver.com/stock/${finalCode}.O/basic`;
+            const overseasUrl = `https://api.stock.naver.com/stock/${finalCode}/basic`;
             const res = await axios.get(overseasUrl, { headers });
             const data = res.data;
 
