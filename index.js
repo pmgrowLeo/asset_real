@@ -27,7 +27,7 @@ const headers = {
 async function fetchStockDataByCode(inputCode) {
     try {
         let finalCode = inputCode.toUpperCase();
-        const isEnglish = /^[A-Z]+$/.test(finalCode);
+        const isEnglish = /^[A-Z.]+$/.test(finalCode);
 
 		const rfMap = { "1": "↑", "2": "▲", "3": "-", "4": "↓", "5": "▼" };
 
@@ -36,6 +36,9 @@ async function fetchStockDataByCode(inputCode) {
             const overseasUrl = `https://api.stock.naver.com/stock/${finalCode}/basic`;
             const res = await axios.get(overseasUrl, { headers });
             const data = res.data;
+            
+            //https://api.stock.naver.com/stock/NVDA.O/price or basic
+            //https://api.stock.naver.com/stock/XRPT.O/price or basic
 
             if (!data || !data.stockName) {
                 console.error(`❌ [Overseas Error] 데이터를 찾을 수 없음: ${finalCode}.O`);
